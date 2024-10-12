@@ -1,11 +1,9 @@
 ﻿using Amazon.CDK;
-using VPC_and_Subnets;
+using AWS.NetworkInfrastructure;
 
-// Create the CDK app
 var app = new App();
 
-// Create the VPC stack
-new MyVpcStack(app, "MyVpcStack", new StackProps
+var vpcStack = new MyVpcStack(app, "MyVpcStack", new StackProps
 {
     // If you don't specify 'env', this stack will be environment-agnostic.
     // Account/Region-dependent features and context lookups will not work,
@@ -13,22 +11,10 @@ new MyVpcStack(app, "MyVpcStack", new StackProps
 
     // Uncomment the next block to specialize this stack for the AWS Account
     // and Region that are implied by the current CLI configuration.
-    
-    /*
     Env = new Amazon.CDK.Environment
     {
         Account = System.Environment.GetEnvironmentVariable("CDK_DEFAULT_ACCOUNT"),
-        Region = System.Environment.GetEnvironmentVariable("CDK_DEFAULT_REGION"),
-    }
-    */
-
-    // Uncomment the next block if you know exactly what Account and Region you
-    // want to deploy the stack to.
-    
-    Env = new Amazon.CDK.Environment
-    {
-        Account = "381492186126",
-        Region = "us-east-1",
+        Region = "us-east-1"
     },
     
     // Add custom synthesis options
@@ -38,7 +24,23 @@ new MyVpcStack(app, "MyVpcStack", new StackProps
     })
 });
 
-Tags.Of(app).Add("Name", "DemoVPC");
+var ec2Stack = new EC2Stack(app, "MyEC2Stack", new StackProps
+{
+    // Ensure the EC2 stack is created after the VPC stack
+    Env = new Amazon.CDK.Environment
+    {
+        Account = System.Environment.GetEnvironmentVariable("CDK_DEFAULT_ACCOUNT"),
+        Region = "us-east-1"
+    },
+    StackName = vpcStack.StackName.Replace("VPC", "EC2"),
+    // Add custom synthesis options
+    Synthesizer = new DefaultStackSynthesizer(new DefaultStackSynthesizerProps
+    {
+        GenerateBootstrapVersionRule = false
+    })
+});
 
-// Synthesize the CloudFormation template
+// Add a dependency to ensure the EC2 stack is created after the VPC stack
+ec2Stack.AddDependency(vpcStack);
+
 app.Synth();

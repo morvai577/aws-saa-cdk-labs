@@ -1,9 +1,50 @@
 using Amazon.CDK;
 using Amazon.CDK.AWS.EC2;
-using System.Collections.Generic;
 
-namespace VPC_and_Subnets;
+namespace AWS.NetworkInfrastructure;
 
+/// <summary>
+/// Represents a CDK Stack that creates a custom VPC with public and private subnets.
+/// </summary>
+/// <remarks>
+/// This stack demonstrates the following capabilities:
+/// <list type="bullet">
+/// <item>
+///     <description>Creating a custom VPC with specified CIDR block.</description>
+/// </item>
+/// <item>
+///     <description>Creating an Internet Gateway and attaching it to the VPC.</description>
+/// </item>
+/// <item>
+///     <description>Creating two public and two private subnets across two availability zones.</description>
+/// </item>
+/// <item>
+///     <description>Configuring public subnets to auto-assign public IP addresses.</description>
+/// </item>
+/// <item>
+///     <description>Creating separate route tables for public and private subnets.</description>
+/// </item>
+/// <item>
+///     <description>Adding a route to the Internet Gateway in the public route table.</description>
+/// </item>
+/// <item>
+///     <description>Associating subnets with their respective route tables.</description>
+/// </item>
+/// <item>
+///     <description>Exporting VPC ID and Public Subnet IDs for use in other stacks.</description>
+/// </item>
+/// </list>
+/// 
+/// This stack exports the following values:
+/// <list type="bullet">
+/// <item><description>VPC ID with export name: {StackName}-VpcId</description></item>
+/// <item><description>Public Subnet IDs with export name: {StackName}-PublicSubnetIds</description></item>
+/// </list>
+/// 
+/// Note: This stack uses low-level L1 constructs (Cfn*) to provide more
+/// direct control over the created AWS resources and to demonstrate manual
+/// creation of VPC components.
+/// </remarks>
 public sealed class MyVpcStack : Stack
 {
     public MyVpcStack(Constructs.Construct scope, string id, IStackProps props = null) : base(scope, id, props)
@@ -115,6 +156,20 @@ public sealed class MyVpcStack : Stack
         {
             SubnetId = privateSubnetB.Ref,
             RouteTableId = privateRouteTable.Ref
+        });
+        
+        // Export VPC ID
+        new CfnOutput(this, "VpcId", new CfnOutputProps
+        {
+            Value = cfnVpc.Ref,
+            ExportName = $"{this.StackName}-VpcId"
+        });
+
+        // Export Public Subnet IDs
+        new CfnOutput(this, "PublicSubnetIds", new CfnOutputProps
+        {
+            Value = $"{publicSubnetA.Ref},{publicSubnetB.Ref}",
+            ExportName = $"{this.StackName}-PublicSubnetIds"
         });
     }
 }

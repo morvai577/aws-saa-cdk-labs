@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.26124.0
 MinimumVisualStudioVersion = 15.0.26124.0
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VPC-and-Subnets", "VPC-and-Subnets\VPC-and-Subnets.csproj", "{76FC09CA-FDC9-4B98-9AE7-02AD0D9B04C6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AWS.NetworkInfrastructure", "AWS.NetworkInfrastructure\AWS.NetworkInfrastructure.csproj", "{76FC09CA-FDC9-4B98-9AE7-02AD0D9B04C6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
