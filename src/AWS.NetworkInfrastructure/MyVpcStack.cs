@@ -171,5 +171,12 @@ public sealed class MyVpcStack : Stack
             Value = $"{publicSubnetA.Ref},{publicSubnetB.Ref}",
             ExportName = $"{this.StackName}-PublicSubnetIds"
         });
+        
+        // Export Private Subnet IDs
+        new CfnOutput(this, "PrivateSubnetIds", new CfnOutputProps
+        {
+            Value = $"{privateSubnetA.Ref},{privateSubnetB.Ref}",
+            ExportName = $"{this.StackName}-PrivateSubnetIds"
+        });
     }
 }
