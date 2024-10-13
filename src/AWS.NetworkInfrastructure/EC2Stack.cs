@@ -5,7 +5,7 @@ using Constructs;
 namespace AWS.NetworkInfrastructure;
 
 /// <summary>
-/// Represents a CDK Stack that creates a bastion host, a NAT instance, and a private EC2 instance within an existing VPC.
+/// Represents a CDK Stack that creates a bastion host, a NAT Gateway, a stopped NAT instance, and a private EC2 instance within an existing VPC.
 /// </summary>
 /// <remarks>
 /// This stack demonstrates the following capabilities:
@@ -21,27 +21,28 @@ namespace AWS.NetworkInfrastructure;
 ///         <list type="bullet">
 ///             <item><description>Bastion host security group allowing SSH access (port 22) from any IPv4 address.</description></item>
 ///             <item><description>Private instance security group allowing SSH access only from the bastion host.</description></item>
-///             <item><description>NAT instance security group allowing HTTP, HTTPS, and ICMP from the VPC CIDR, and SSH from any IPv4 address.</description></item>
+///             <item><description>NAT instance security group (for potential use) allowing HTTP, HTTPS, and ICMP from the VPC CIDR, and SSH from any IPv4 address.</description></item>
 ///         </list>
 ///     </description>
 /// </item>
 /// <item>
-///     <description>Launching three EC2 instances:
+///     <description>Launching EC2 instances and network components:
 ///         <list type="bullet">
 ///             <item><description>A bastion host in a public subnet.</description></item>
-///             <item><description>A NAT instance in a public subnet, configured to allow internet access for private instances.</description></item>
+///             <item><description>A NAT Gateway in a public subnet, configured to allow internet access for private instances.</description></item>
+///             <item><description>A stopped NAT instance in a public subnet (for potential fallback or comparison).</description></item>
 ///             <item><description>A private instance in a private subnet.</description></item>
-///             <item><description>All using Amazon Linux 2 AMIs and t2.micro instance types.</description></item>
-///             <item><description>Each associated with its respective security group.</description></item>
-///             <item><description>Bastion and NAT instances assigned public IPs, private instance with only a private IP.</description></item>
+///             <item><description>All EC2 instances using Amazon Linux 2 AMIs and t2.micro instance types.</description></item>
+///             <item><description>Each instance associated with its respective security group.</description></item>
+///             <item><description>Bastion host assigned a public IP, private instance with only a private IP.</description></item>
 ///         </list>
 ///     </description>
 /// </item>
 /// <item>
-///     <description>Creating a private route table with a route to the NAT instance for internet access from private subnets.</description>
+///     <description>Creating a private route table with a route to the NAT Gateway for internet access from private subnets.</description>
 /// </item>
 /// <item>
-///     <description>Outputting the public IP addresses of the bastion host and NAT instance, and the private IP address of the private instance.</description>
+///     <description>Outputting the public IP address of the bastion host, the private IP address of the private instance, the NAT Gateway ID, and the NAT Instance ID.</description>
 /// </item>
 /// </list>
 /// 
@@ -52,9 +53,9 @@ namespace AWS.NetworkInfrastructure;
 /// <item><description>Private Subnet IDs with export name: {StackName}-PrivateSubnetIds</description></item>
 /// </list>
 /// 
-/// Note: This stack uses low-level L1 constructs (Cfn*) for resources to provide more
-/// direct control over the created AWS resources and to demonstrate a comprehensive network architecture
-/// including bastion host access and NAT functionality for private instances.
+/// Note: This stack uses a combination of high-level constructs and low-level L1 constructs (Cfn*) for resources to provide
+/// a comprehensive network architecture. It demonstrates the use of a NAT Gateway for scalable outbound internet access from
+/// private subnets, while also maintaining a stopped NAT instance for potential alternative scenarios or comparisons.
 /// </remarks>
 
 public class EC2Stack : Stack
@@ -64,7 +65,7 @@ public class EC2Stack : Stack
         // Import VPC ID
         var vpcId = Fn.ImportValue($"{props.StackName.Replace("EC2", "VPC")}-VpcId");
         
-        // Import Public Subnet IDs
+        // Import Public and Private Subnet IDs
         var publicSubnetIdsString = Fn.ImportValue($"{props.StackName.Replace("EC2", "VPC")}-PublicSubnetIds");
         var privateSubnetIdsString = Fn.ImportValue($"{props.StackName.Replace("EC2", "VPC")}-PrivateSubnetIds");
         
@@ -149,10 +150,10 @@ public class EC2Stack : Stack
             }
         });
 
-        // Use a specific AMI ID for the NAT instance instead of LookupMachineImage
+        // Use a specific AMI ID for the NAT instance
         var natInstanceAmiId = "ami-0c02fb55956c7d316"; // Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type
 
-        // Create the NAT instance
+        // Create the NAT instance (stopped)
         var natInstance = new CfnInstance(this, "NatInstance", new CfnInstanceProps
         {
             ImageId = natInstanceAmiId,
@@ -173,6 +174,27 @@ public class EC2Stack : Stack
             Tags = new[]
             {
                 new CfnTag { Key = "Name", Value = "NatInstance" }
+            }
+        });
+
+        // Create an Elastic IP for the NAT Gateway
+        var eip = new CfnEIP(this, "NatGatewayEIP", new CfnEIPProps
+        {
+            Domain = "vpc",
+            Tags = new[]
+            {
+                new CfnTag { Key = "Name", Value = "NatGatewayEIP" }
+            }
+        });
+
+        // Create a NAT Gateway
+        var natGateway = new CfnNatGateway(this, "DemoNATGW", new CfnNatGatewayProps
+        {
+            AllocationId = eip.AttrAllocationId,
+            SubnetId = Fn.Select(0, Fn.Split(",", publicSubnetIdsString)),
+            Tags = new[]
+            {
+                new CfnTag { Key = "Name", Value = "DemoNATGW" }
             }
         });
         
@@ -239,12 +261,12 @@ public class EC2Stack : Stack
             }
         });
 
-        // Add a route to the NAT instance for internet access
-        new CfnRoute(this, "PrivateSubnetNatRoute", new CfnRouteProps
+        // Add a route to the NAT Gateway for internet access
+        new CfnRoute(this, "PrivateSubnetNatGatewayRoute", new CfnRouteProps
         {
             RouteTableId = privateRouteTable.Ref,
             DestinationCidrBlock = "0.0.0.0/0",
-            InstanceId = natInstance.Ref
+            NatGatewayId = natGateway.Ref
         });
 
         // Associate the private route table with the private subnet
@@ -268,11 +290,18 @@ public class EC2Stack : Stack
             Value = Fn.GetAtt(privateInstance.LogicalId, "PrivateIp").ToString()
         });
 
-        // Output the public IP of the NAT instance
-        new CfnOutput(this, "NatInstancePublicIP", new CfnOutputProps
+        // Output the NAT Gateway ID
+        new CfnOutput(this, "NatGatewayId", new CfnOutputProps
         {
-            Description = "Public IP address of the NAT instance",
-            Value = Fn.GetAtt(natInstance.LogicalId, "PublicIp").ToString()
+            Description = "ID of the NAT Gateway",
+            Value = natGateway.Ref
+        });
+
+        // Output the NAT Instance ID
+        new CfnOutput(this, "NatInstanceId", new CfnOutputProps
+        {
+            Description = "ID of the NAT Instance (stopped)",
+            Value = natInstance.Ref
         });
     }
 }
