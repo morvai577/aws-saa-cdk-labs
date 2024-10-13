@@ -5,7 +5,7 @@ using Constructs;
 namespace AWS.NetworkInfrastructure;
 
 /// <summary>
-/// Represents a CDK Stack that creates a bastion host and a private EC2 instance within an existing VPC.
+/// Represents a CDK Stack that creates a bastion host, a NAT instance, and a private EC2 instance within an existing VPC.
 /// </summary>
 /// <remarks>
 /// This stack demonstrates the following capabilities:
@@ -17,26 +17,31 @@ namespace AWS.NetworkInfrastructure;
 ///     <description>Creating a key pair for SSH access to EC2 instances.</description>
 /// </item>
 /// <item>
-///     <description>Creating two security groups:
+///     <description>Creating three security groups:
 ///         <list type="bullet">
 ///             <item><description>Bastion host security group allowing SSH access (port 22) from any IPv4 address.</description></item>
 ///             <item><description>Private instance security group allowing SSH access only from the bastion host.</description></item>
+///             <item><description>NAT instance security group allowing HTTP, HTTPS, and ICMP from the VPC CIDR, and SSH from any IPv4 address.</description></item>
 ///         </list>
 ///     </description>
 /// </item>
 /// <item>
-///     <description>Launching two EC2 instances:
+///     <description>Launching three EC2 instances:
 ///         <list type="bullet">
 ///             <item><description>A bastion host in a public subnet.</description></item>
+///             <item><description>A NAT instance in a public subnet, configured to allow internet access for private instances.</description></item>
 ///             <item><description>A private instance in a private subnet.</description></item>
-///             <item><description>Both using the latest Amazon Linux 2 AMI and t2.micro instance type.</description></item>
+///             <item><description>All using Amazon Linux 2 AMIs and t2.micro instance types.</description></item>
 ///             <item><description>Each associated with its respective security group.</description></item>
-///             <item><description>Bastion host assigned a public IP, private instance with only a private IP.</description></item>
+///             <item><description>Bastion and NAT instances assigned public IPs, private instance with only a private IP.</description></item>
 ///         </list>
 ///     </description>
 /// </item>
 /// <item>
-///     <description>Outputting the public IP address of the bastion host and the private IP address of the private instance.</description>
+///     <description>Creating a private route table with a route to the NAT instance for internet access from private subnets.</description>
+/// </item>
+/// <item>
+///     <description>Outputting the public IP addresses of the bastion host and NAT instance, and the private IP address of the private instance.</description>
 /// </item>
 /// </list>
 /// 
@@ -48,7 +53,8 @@ namespace AWS.NetworkInfrastructure;
 /// </list>
 /// 
 /// Note: This stack uses low-level L1 constructs (Cfn*) for resources to provide more
-/// direct control over the created AWS resources and to demonstrate a bastion host architecture for enhanced security.
+/// direct control over the created AWS resources and to demonstrate a comprehensive network architecture
+/// including bastion host access and NAT functionality for private instances.
 /// </remarks>
 
 public class EC2Stack : Stack
@@ -101,6 +107,72 @@ public class EC2Stack : Stack
                     ToPort = 22,
                     SourceSecurityGroupId = bastionSecurityGroup.Ref
                 }
+            }
+        });
+        
+        // Create a security group for the NAT instance
+        var natInstanceSecurityGroup = new CfnSecurityGroup(this, "NatInstanceSecurityGroup", new CfnSecurityGroupProps
+        {
+            GroupName = "NatInstanceSG",
+            GroupDescription = "Security group for NAT instance",
+            VpcId = vpcId,
+            SecurityGroupIngress = new[]
+            {
+                new CfnSecurityGroup.IngressProperty
+                {
+                    IpProtocol = "tcp",
+                    FromPort = 80,
+                    ToPort = 80,
+                    CidrIp = "10.0.0.0/16"
+                },
+                new CfnSecurityGroup.IngressProperty
+                {
+                    IpProtocol = "tcp",
+                    FromPort = 443,
+                    ToPort = 443,
+                    CidrIp = "10.0.0.0/16"
+                },
+                new CfnSecurityGroup.IngressProperty
+                {
+                    IpProtocol = "icmp",
+                    FromPort = -1,
+                    ToPort = -1,
+                    CidrIp = "10.0.0.0/16"
+                },
+                new CfnSecurityGroup.IngressProperty
+                {
+                    IpProtocol = "tcp",
+                    FromPort = 22,
+                    ToPort = 22,
+                    CidrIp = "0.0.0.0/0"
+                }
+            }
+        });
+
+        // Use a specific AMI ID for the NAT instance instead of LookupMachineImage
+        var natInstanceAmiId = "ami-0c02fb55956c7d316"; // Amazon Linux 2 AMI (HVM) - Kernel 5.10, SSD Volume Type
+
+        // Create the NAT instance
+        var natInstance = new CfnInstance(this, "NatInstance", new CfnInstanceProps
+        {
+            ImageId = natInstanceAmiId,
+            InstanceType = InstanceType.Of(InstanceClass.T2, InstanceSize.MICRO).ToString(),
+            KeyName = keyPair.KeyName,
+            NetworkInterfaces = new[]
+            {
+                new CfnInstance.NetworkInterfaceProperty
+                {
+                    DeviceIndex = "0",
+                    AssociatePublicIpAddress = true,
+                    DeleteOnTermination = true,
+                    SubnetId = Fn.Select(0, Fn.Split(",", publicSubnetIdsString)),
+                    GroupSet = new[] { natInstanceSecurityGroup.Ref }
+                }
+            },
+            SourceDestCheck = false,
+            Tags = new[]
+            {
+                new CfnTag { Key = "Name", Value = "NatInstance" }
             }
         });
         
@@ -157,6 +229,31 @@ public class EC2Stack : Stack
             }
         });
 
+        // Create a route table for private subnets
+        var privateRouteTable = new CfnRouteTable(this, "PrivateRouteTable", new CfnRouteTableProps
+        {
+            VpcId = vpcId,
+            Tags = new[]
+            {
+                new CfnTag { Key = "Name", Value = "PrivateRouteTable" }
+            }
+        });
+
+        // Add a route to the NAT instance for internet access
+        new CfnRoute(this, "PrivateSubnetNatRoute", new CfnRouteProps
+        {
+            RouteTableId = privateRouteTable.Ref,
+            DestinationCidrBlock = "0.0.0.0/0",
+            InstanceId = natInstance.Ref
+        });
+
+        // Associate the private route table with the private subnet
+        new CfnSubnetRouteTableAssociation(this, "PrivateSubnetRouteTableAssociation", new CfnSubnetRouteTableAssociationProps
+        {
+            RouteTableId = privateRouteTable.Ref,
+            SubnetId = Fn.Select(0, Fn.Split(",", privateSubnetIdsString))
+        });
+
         // Output the public IP of the Bastion host
         new CfnOutput(this, "BastionPublicIP", new CfnOutputProps
         {
@@ -169,6 +266,13 @@ public class EC2Stack : Stack
         {
             Description = "Private IP address of the private EC2 instance",
             Value = Fn.GetAtt(privateInstance.LogicalId, "PrivateIp").ToString()
+        });
+
+        // Output the public IP of the NAT instance
+        new CfnOutput(this, "NatInstancePublicIP", new CfnOutputProps
+        {
+            Description = "Public IP address of the NAT instance",
+            Value = Fn.GetAtt(natInstance.LogicalId, "PublicIp").ToString()
         });
     }
 }
